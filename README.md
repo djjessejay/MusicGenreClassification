@@ -14,6 +14,8 @@ collection of [Jupyter notebooks](https://jupyter.org/) all about detection and 
 
 [Music Genre Classification Feature Ensemble](MusicGenreClassification_FeatureEnsemble.ipynb)
 
+[Hypothesengetriebene Experimente in JAX (research/)](research/README.md): Vorregistrierte Hypothesen, wiederholte CV, korrigierte Signifikanztests, Bericht in [research/results/REPORT.md](research/results/REPORT.md)
+
 Alternatively, you can use [NBviewer](https://nbviewer.jupyter.org/) for better compatibility with tqdm widgets.
 
 
