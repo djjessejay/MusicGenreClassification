@@ -4,13 +4,29 @@ from mgc_jax import ALL_FEATURES, MFCC_FEATURES, SPECTRAL_FEATURES, load_mgc, st
 from mgc_jax.data import standardize
 
 
-def test_load_shapes_and_balance():
-    ds = load_mgc()
+def test_load_raw_shapes_and_balance():
+    ds = load_mgc(dedup=False)
     assert ds.X.shape == (1000, 26)
     assert ds.n_classes == 10
     assert ds.features == ALL_FEATURES
-    counts = np.bincount(ds.y)
-    assert counts.tolist() == [100] * 10
+    assert np.bincount(ds.y).tolist() == [100] * 10
+    assert ds.dropped_duplicates == () and ds.dropped_conflicts == ()
+
+
+def test_dedup_removes_exact_duplicates_and_conflicts():
+    ds = load_mgc()
+    assert len(ds.dropped_duplicates) == 13  # 14 Duplikatgruppen, eine davon ist der Label-Konflikt
+    assert set(ds.dropped_conflicts) == {"metal.00058.au", "rock.00016.au"}
+    assert ds.X.shape == (1000 - 13 - 2, 26)
+    assert len(ds.filenames) == ds.X.shape[0]
+    assert len({tuple(row) for row in ds.X.tolist()}) == ds.X.shape[0]
+    assert "pop.00067.au" in ds.filenames and "pop.00071.au" not in ds.filenames
+
+
+def test_select_preserves_metadata():
+    ds = load_mgc()
+    sub = ds.select(MFCC_FEATURES)
+    assert sub.filenames == ds.filenames and sub.dropped_conflicts == ds.dropped_conflicts
 
 
 def test_feature_subsets():
@@ -24,10 +40,12 @@ def test_folds_are_stratified_and_disjoint():
     ds = load_mgc()
     folds = stratified_folds(ds.y, 10, seed=3)
     all_test = np.concatenate([te for _, te in folds])
-    assert sorted(all_test.tolist()) == list(range(1000))
+    assert sorted(all_test.tolist()) == list(range(len(ds.y)))
+    counts = np.bincount(ds.y)
     for tr, te in folds:
         assert len(np.intersect1d(tr, te)) == 0
-        assert np.bincount(ds.y[te], minlength=10).tolist() == [10] * 10
+        per_class = np.bincount(ds.y[te], minlength=10)
+        assert all(abs(per_class[c] - counts[c] / 10) < 1 for c in range(10))
 
 
 def test_folds_reproducible():

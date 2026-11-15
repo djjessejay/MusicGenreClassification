@@ -1,6 +1,6 @@
 # H2 / H3: Bringen die 6 spektralen Features einen Gewinn über MFCC-only hinaus?
 
-Status: H2 BELEGT (Differenz +0.041, p_korr 8.1e-3), H3 BELEGT (Differenz +0.057, p_korr 3.4e-5). Lauf 2026-11-15, Details: results/REPORT.md
+Status: H2 BELEGT (Differenz +0.053, p_korr 8.4e-4, CI [+0.023, +0.082]), H3 BELEGT (Differenz +0.058, p_korr 1.2e-4, CI [+0.030, +0.086]). Lauf 2026-11-15 auf 985 deduplizierten Clips, Details: results/REPORT.md
 
 ## Frage
 MFCC-Koeffizienten beschreiben die spektrale Hüllkurve bereits. Tragen rmse, chroma_stft, spec_cent, spec_bw,

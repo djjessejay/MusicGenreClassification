@@ -23,6 +23,9 @@ class Dataset:
     y: np.ndarray          # (n,) int64, Klassenindex
     genres: list[str]      # Index -> Genrename
     features: list[str]    # Spaltennamen von X
+    filenames: list[str]   # Clip-Dateinamen, parallel zu X
+    dropped_duplicates: tuple[str, ...] = ()   # entfernte exakte Kopien (zweite und weitere Vorkommen)
+    dropped_conflicts: tuple[str, ...] = ()    # entfernte Clips identischer Features mit widersprüchlichem Label
 
     @property
     def n_classes(self) -> int:
@@ -30,26 +33,51 @@ class Dataset:
 
     def select(self, names: list[str]) -> "Dataset":
         idx = [self.features.index(n) for n in names]
-        return Dataset(self.X[:, idx], self.y, self.genres, list(names))
+        return Dataset(self.X[:, idx], self.y, self.genres, list(names), self.filenames,
+                       self.dropped_duplicates, self.dropped_conflicts)
 
 
-def load_mgc(path: str | Path = DEFAULT_CSV) -> Dataset:
+def _dedup(rows: list[list[str]], col: dict[str, int]) -> tuple[list[list[str]], list[str], list[str]]:
+    """GTZAN enthält exakte Duplikate (Sturm 2013). Identische Featurevektoren dürfen nicht gleichzeitig in
+    Trainings- und Testfold landen. Regel: erstes Vorkommen behalten, weitere Kopien verwerfen; Gruppen mit
+    widersprüchlichen Labels komplett verwerfen, weil das Label dann nicht entscheidbar ist."""
+    groups: dict[tuple[str, ...], list[int]] = {}
+    for i, r in enumerate(rows):
+        groups.setdefault(tuple(r[col[f]] for f in ALL_FEATURES), []).append(i)
+    drop_dup, drop_conf = set(), set()
+    for members in groups.values():
+        if len(members) < 2:
+            continue
+        if len({rows[i][col["genre"]] for i in members}) > 1:
+            drop_conf.update(members)
+        else:
+            drop_dup.update(members[1:])
+    keep = [r for i, r in enumerate(rows) if i not in drop_dup and i not in drop_conf]
+    name = lambda i: rows[i][col["filename"]]
+    return keep, sorted(name(i) for i in drop_dup), sorted(name(i) for i in drop_conf)
+
+
+def load_mgc(path: str | Path = DEFAULT_CSV, *, dedup: bool = True) -> Dataset:
     path = Path(path)
     with path.open(newline="") as fh:
         reader = csv.reader(fh)
         header = next(reader)
         rows = list(reader)
     col = {name: i for i, name in enumerate(header)}
-    missing = [f for f in ALL_FEATURES if f not in col]
+    missing = [f for f in ALL_FEATURES + ["genre", "filename"] if f not in col]
     if missing:
         raise ValueError(f"Spalten fehlen in {path}: {missing}")
+    dropped_dup, dropped_conf = [], []
+    if dedup:
+        rows, dropped_dup, dropped_conf = _dedup(rows, col)
     genres = sorted({r[col["genre"]] for r in rows})
     g2i = {g: i for i, g in enumerate(genres)}
     X = np.array([[float(r[col[f]]) for f in ALL_FEATURES] for r in rows], dtype=np.float32)
     y = np.array([g2i[r[col["genre"]]] for r in rows], dtype=np.int64)
     if not np.all(np.isfinite(X)):
         raise ValueError("Nicht-endliche Werte in den Features")
-    return Dataset(X, y, genres, list(ALL_FEATURES))
+    return Dataset(X, y, genres, list(ALL_FEATURES), [r[col["filename"]] for r in rows],
+                   tuple(dropped_dup), tuple(dropped_conf))
 
 
 def stratified_folds(y: np.ndarray, n_folds: int, seed: int) -> list[tuple[np.ndarray, np.ndarray]]:

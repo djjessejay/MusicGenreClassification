@@ -10,7 +10,8 @@ def test_quick_end_to_end(tmp_path: Path):
     assert set(res["summary"]) == set(experiment.CONFIGS)
     assert [h["id"] for h in res["hypotheses"]] == [h["id"] for h in experiment.HYPOTHESES]
     for h in res["hypotheses"]:
-        assert "verdict" in h and "p_corrected" in h["test"]
+        assert "verdict" in h and "p_corrected" in h["test"] and "ci95_corrected" in h["test"]
+    assert res["meta"]["n_clips"] == 985 and len(res["meta"]["dropped_duplicates"]) == 13
     report = (tmp_path / "REPORT.md").read_text()
     assert "## Hypothesen" in report and "Konfusionsmatrix" in report
 

@@ -1,10 +1,13 @@
 """Statistik zum Belegen oder Widerlegen einer Hypothese aus wiederholter k-facher CV.
 
 paired_cv_test: Gepaarte Differenzen (Modell A minus Modell B) je Fold. Folds einer
-wiederholten CV sind nicht unabhängig, darum zusätzlich der korrigierte t-Test nach
-Nadeau & Bengio (2003): Varianz wird mit (1/J + n_test/n_train) statt 1/J skaliert.
+wiederholten CV sind nicht unabhängig, darum der korrigierte t-Test nach Nadeau & Bengio
+(2003): Varianz wird mit (1/J + n_test/n_train) statt 1/J skaliert. Das zurückgegebene
+Konfidenzintervall ci95_corrected nutzt dieselbe korrigierte Varianz und ist die Grundlage
+des Urteils. Null-Varianz wird explizit behandelt: keine Differenz heisst t=0, p=1.
 
-bootstrap_ci: Perzentil-Bootstrap des Mittelwerts der Differenzen.
+bootstrap_ci: Perzentil-Bootstrap des Mittelwerts. Behandelt Folds als unabhängig und ist
+darum zu schmal; nur zur Information, nicht für das Urteil.
 
 mcnemar_test: Exakter McNemar-Test auf gepoolten Out-of-Fold-Vorhersagen (Binomialtest
 auf den diskordanten Paaren), unabhängig von der Fold-Korrelation.
@@ -15,24 +18,42 @@ import numpy as np
 from scipy import stats
 
 
-def paired_cv_test(diffs: np.ndarray, n_train: int, n_test: int) -> dict:
+def paired_cv_test(diffs: np.ndarray, n_train: int, n_test: int, alpha: float = 0.05) -> dict:
     d = np.asarray(diffs, dtype=np.float64)
     J = len(d)
-    mean, var = d.mean(), d.var(ddof=1)
-    naive_t, naive_p = stats.ttest_rel(d, np.zeros_like(d)) if var > 0 else (np.inf, 0.0)
+    if J < 2:
+        raise ValueError("mindestens 2 gepaarte Differenzen nötig")
+    mean, var = float(d.mean()), float(d.var(ddof=1))
     corr_var = (1.0 / J + n_test / n_train) * var
-    corr_t = mean / np.sqrt(corr_var) if corr_var > 0 else np.inf
-    corr_p = 2 * stats.t.sf(abs(corr_t), df=J - 1)
+    if var == 0.0:
+        # Konstante Differenzen: ohne Streuung ist kein Test möglich. Keine Differenz -> nicht signifikant.
+        if mean == 0.0:
+            t_naive = t_corr = 0.0
+            p_naive = p_corr = 1.0
+        else:
+            t_naive = t_corr = float(np.sign(mean)) * np.inf
+            p_naive = p_corr = 0.0
+        ci = (mean, mean)
+    else:
+        t_naive = mean / np.sqrt(var / J)
+        p_naive = 2 * stats.t.sf(abs(t_naive), df=J - 1)
+        t_corr = mean / np.sqrt(corr_var)
+        p_corr = 2 * stats.t.sf(abs(t_corr), df=J - 1)
+        half = stats.t.ppf(1 - alpha / 2, df=J - 1) * np.sqrt(corr_var)
+        ci = (mean - half, mean + half)
     return {
         "n_pairs": int(J),
-        "mean_diff": float(mean),
+        "mean_diff": mean,
         "std_diff": float(np.sqrt(var)),
-        "t_naive": float(naive_t), "p_naive": float(naive_p),
-        "t_corrected": float(corr_t), "p_corrected": float(corr_p),
+        "t_naive": float(t_naive), "p_naive": float(p_naive),
+        "t_corrected": float(t_corr), "p_corrected": float(p_corr),
+        "ci95_corrected": (float(ci[0]), float(ci[1])),
+        "alpha": alpha,
     }
 
 
 def bootstrap_ci(diffs: np.ndarray, n_boot: int = 10_000, alpha: float = 0.05, seed: int = 0) -> tuple[float, float]:
+    """Unkorrigiertes Perzentil-Bootstrap-CI. Nur informativ, siehe Modul-Docstring."""
     rng = np.random.default_rng(seed)
     d = np.asarray(diffs, dtype=np.float64)
     means = rng.choice(d, size=(n_boot, len(d)), replace=True).mean(axis=1)
@@ -49,15 +70,15 @@ def mcnemar_test(y: np.ndarray, pred_a: np.ndarray, pred_b: np.ndarray) -> dict:
     return {"only_a_correct": n10, "only_b_correct": n01, "p_exact": p}
 
 
-def verdict(test: dict, ci: tuple[float, float], alpha: float = 0.05) -> str:
-    """Vorregistrierte Entscheidungsregel: belegt, wenn korrigiertes p < alpha UND CI die 0 ausschliesst
-    UND die Differenz positiv ist. Widerlegt (kein Effekt in der erwarteten Richtung), wenn CI die 0
-    einschliesst oder die Differenz negativ ist, bei ausreichender Power. Sonst inkonklusiv."""
-    lo, hi = ci
-    if test["p_corrected"] < alpha and lo > 0:
+def verdict(test: dict) -> str:
+    """Vorregistrierte, symmetrische Entscheidungsregel auf Basis des korrigierten Tests:
+    BELEGT, wenn p_korrigiert < alpha und das korrigierte CI vollständig > 0 liegt.
+    WIDERLEGT, wenn p_korrigiert < alpha und das korrigierte CI vollständig < 0 liegt.
+    Sonst NICHT BELEGT: die Daten reichen für keine Richtung aus."""
+    lo, hi = test["ci95_corrected"]
+    significant = test["p_corrected"] < test["alpha"]
+    if significant and lo > 0:
         return "BELEGT"
-    if hi < 0:
+    if significant and hi < 0:
         return "WIDERLEGT (Effekt in Gegenrichtung)"
-    if lo <= 0 <= hi:
-        return "NICHT BELEGT (CI enthält 0)"
-    return "INKONKLUSIV"
+    return "NICHT BELEGT (kein signifikanter Effekt nach Fold-Korrektur)"

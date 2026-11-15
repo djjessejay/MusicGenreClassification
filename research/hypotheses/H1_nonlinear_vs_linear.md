@@ -1,6 +1,6 @@
 # H1: Nichtlineare Entscheidungsgrenzen schlagen das lineare Modell
 
-Status: BELEGT (Lauf 2026-11-15, 5 x 10-fold, Differenz +0.057, p_korr 1.1e-3, CI [+0.045, +0.070]). Details: results/REPORT.md
+Status: BELEGT (Lauf 2026-11-15 auf 985 deduplizierten Clips, 5 x 10-fold, Differenz +0.056, p_korr 9.1e-5, korrigiertes CI [+0.030, +0.082]). Details: results/REPORT.md
 
 ## Frage
 Reichen die 26 Clip-Mittelwert-Features (6 spektrale + 20 MFCC) für lineare Trennbarkeit der 10 GTZAN-Genres,

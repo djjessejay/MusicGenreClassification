@@ -67,7 +67,7 @@ def run_cv(ds, *, repeats: int, folds: int, steps: int, batch_size: int, log=pri
             log(f"  repeat {r+1}/{repeats} fold {k+1}/{folds}  "
                 f"{'  '.join(f'{n}={acc[n][r,k]:.3f}' for n in CONFIGS)}  "
                 f"[{done}/{repeats*folds*n_cfg} runs, {time.time()-t0:.0f}s]")
-    n_test = len(ds.y) // folds
+    n_test = int(round(len(ds.y) / folds))
     return {"acc": acc, "oof": oof, "n_train": len(ds.y) - n_test, "n_test": n_test}
 
 
@@ -78,11 +78,10 @@ def evaluate(ds, cv: dict, alpha: float = 0.05) -> dict:
     hyps = []
     for h in HYPOTHESES:
         diffs = (acc[h["a"]] - acc[h["b"]]).ravel()
-        test = paired_cv_test(diffs, cv["n_train"], cv["n_test"])
-        ci = bootstrap_ci(diffs)
+        test = paired_cv_test(diffs, cv["n_train"], cv["n_test"], alpha=alpha)
         mc = mcnemar_test(ds.y, oof[h["a"]][0], oof[h["b"]][0])
-        hyps.append({**h, "test": test, "ci95": ci, "mcnemar_repeat0": mc,
-                     "verdict": verdict(test, ci, alpha)})
+        hyps.append({**h, "test": test, "ci95_bootstrap_uncorrected": bootstrap_ci(diffs),
+                     "mcnemar_repeat0": mc, "verdict": verdict(test)})
     best = max(summary, key=lambda n: summary[n]["mean"])
     cm = np.zeros((ds.n_classes, ds.n_classes), dtype=int)
     for yt, yp in zip(ds.y, oof[best][0]):
@@ -104,16 +103,24 @@ def write_report(out: Path, meta: dict, ev: dict) -> None:
     for name, cfg in CONFIGS.items():
         s = ev["summary"][name]
         L.append(f"| {name} | {len(cfg['features'])} | {cfg['hidden'] or '-'} | {s['mean']:.4f} +- {s['std']:.4f} |")
-    L.append("\nZufallsniveau bei 10 balancierten Klassen: 0.1000\n")
+    L.append("\nZufallsniveau bei 10 annähernd balancierten Klassen: ca. 0.10\n")
+    L.append("### Datenbereinigung\n")
+    L.append(f"Clips nach Deduplizierung: {meta['n_clips']} von {meta['n_raw']}.  \n"
+             f"Entfernte exakte Kopien ({len(meta['dropped_duplicates'])}): {', '.join(meta['dropped_duplicates'])}  \n"
+             f"Entfernt wegen Label-Konflikt bei identischen Features ({len(meta['dropped_conflicts'])}): "
+             f"{', '.join(meta['dropped_conflicts'])}\n")
     L.append("## Hypothesen\n")
-    L.append("Entscheidungsregel (vorregistriert): BELEGT, wenn korrigiertes p < 0.05 (Nadeau-Bengio) und das "
-             "95%-Bootstrap-CI der Differenz die 0 ausschliesst, in der behaupteten Richtung.\n")
+    L.append("Entscheidungsregel (vorregistriert, symmetrisch): BELEGT, wenn korrigiertes p < 0.05 (Nadeau-Bengio) "
+             "und das korrigierte 95%-CI der Differenz vollständig > 0 liegt. WIDERLEGT bei p < 0.05 und CI < 0. "
+             "Sonst NICHT BELEGT. Das unkorrigierte Bootstrap-CI ist nur zur Information angegeben.\n")
     for h in ev["hypotheses"]:
-        t, (lo, hi), mc = h["test"], h["ci95"], h["mcnemar_repeat0"]
+        t, mc = h["test"], h["mcnemar_repeat0"]
+        (lo, hi), (blo, bhi) = t["ci95_corrected"], h["ci95_bootstrap_uncorrected"]
         L.append(f"### {h['id']}: {h['title']}\n")
         L.append(f"Behauptung: accuracy({h['a']}) > accuracy({h['b']})  \n"
                  f"Mittlere Differenz: {t['mean_diff']:+.4f} (Std {t['std_diff']:.4f}, {t['n_pairs']} gepaarte Folds)  \n"
-                 f"95%-Bootstrap-CI: [{lo:+.4f}, {hi:+.4f}]  \n"
+                 f"95%-CI korrigiert (Nadeau-Bengio): [{lo:+.4f}, {hi:+.4f}]  \n"
+                 f"95%-CI Bootstrap unkorrigiert (nur Info): [{blo:+.4f}, {bhi:+.4f}]  \n"
                  f"t-Test naiv: t={t['t_naive']:.2f}, p={t['p_naive']:.2e}  \n"
                  f"t-Test korrigiert (Nadeau-Bengio): t={t['t_corrected']:.2f}, p={t['p_corrected']:.2e}  \n"
                  f"McNemar (OOF, Wiederholung 0): nur A richtig={mc['only_a_correct']}, "
@@ -129,8 +136,9 @@ def write_report(out: Path, meta: dict, ev: dict) -> None:
     for g, row in zip(labels, ev["confusion_repeat0"]["matrix"]):
         L.append(f"| {g} | " + " | ".join(str(v) for v in row) + " |")
     L.append("\n## Einschränkungen\n")
-    L.append("- GTZAN enthält bekannte Duplikate, Fehllabels und Artefakte (Sturm 2013); absolute Werte sind "
-             "nicht auf andere Datensätze übertragbar, die Paarvergleiche innerhalb des Datensatzes bleiben gültig.\n"
+    L.append("- GTZAN enthält bekannte Duplikate, Fehllabels und Artefakte (Sturm 2013). Exakte Feature-Duplikate "
+             "sind oben entfernt; nahezu identische Clips und Fehllabels bleiben. Absolute Werte sind nicht auf andere "
+             "Datensätze übertragbar, die Paarvergleiche innerhalb des Datensatzes bleiben gültig.\n"
              "- Features sind Clip-Mittelwerte (30 s); zeitliche Struktur ist nicht modelliert.\n"
              "- Hyperparameter sind fix (keine innere CV); ein fairer Vergleich mit Tuning je Modell steht aus.\n")
     L.append("## Reproduktion\n\n```bash\ncd research && pip install -r requirements.txt && python experiment.py\n```\n")
@@ -153,7 +161,8 @@ def main(argv=None) -> int:
     ds = load_mgc(args.csv) if args.csv else load_mgc()
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
-    print(f"Daten: {ds.X.shape[0]} Clips, {ds.X.shape[1]} Features, {ds.n_classes} Genres")
+    print(f"Daten: {ds.X.shape[0]} Clips, {ds.X.shape[1]} Features, {ds.n_classes} Genres "
+          f"(entfernt: {len(ds.dropped_duplicates)} Duplikate, {len(ds.dropped_conflicts)} Label-Konflikte)")
     cv = run_cv(ds, repeats=args.repeats, folds=args.folds, steps=args.steps, batch_size=args.batch_size)
     ev = evaluate(ds, cv)
     meta = {
@@ -161,6 +170,9 @@ def main(argv=None) -> int:
         "command": "python " + " ".join(sys.argv),
         "repeats": args.repeats, "folds": args.folds, "steps": args.steps, "batch_size": args.batch_size,
         "python": platform.python_version(), "jax": jax.__version__, "platform": platform.platform(),
+        "n_clips": int(len(ds.y)),
+        "n_raw": int(len(ds.y) + len(ds.dropped_duplicates) + len(ds.dropped_conflicts)),
+        "dropped_duplicates": list(ds.dropped_duplicates), "dropped_conflicts": list(ds.dropped_conflicts),
         "configs": {n: {**c, "features": len(c["features"])} for n, c in CONFIGS.items()},
     }
     (out / "results.json").write_text(json.dumps({"meta": meta, **ev,

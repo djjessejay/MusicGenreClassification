@@ -10,12 +10,12 @@ Jeder Schritt hat einen festen Ort im Repo. Nichts wird nachträglich an die Erg
 
 | Schritt | Ort | Inhalt |
 |---|---|---|
-| Analysieren | `mgc_jax/data.py` | Laden, Featuresets, stratifizierte Folds, Standardisierung ohne Leakage |
+| Analysieren | `mgc_jax/data.py` | Laden, Deduplizierung, Featuresets, stratifizierte Folds, Standardisierung ohne Leakage |
 | Hypothese | `hypotheses/*.md` | Vorregistrierung: Frage, H1/H0, Metrik, Entscheidungsregel, Fehlerquellen |
 | Experiment | `experiment.py`, `mgc_jax/models.py` | Konfigurationen, wiederholte k-fache CV, reine JAX-Modelle mit Adam |
-| Belegen / Widerlegen | `mgc_jax/stats.py` | Korrigierter t-Test (Nadeau-Bengio), Bootstrap-CI, McNemar, Urteil |
+| Belegen / Widerlegen | `mgc_jax/stats.py` | Korrigierter t-Test und korrigiertes CI (Nadeau-Bengio), McNemar, Urteil |
 | Dokumentieren | `results/REPORT.md`, `results/results.json` | Bericht mit Urteil je Hypothese, Konfusion, Umgebung, Befehl |
-| Absichern | `tests/`, `.github/workflows/research.yml` | 16 Tests, CI mit Rauchtest-Experiment als Artefakt |
+| Absichern | `tests/`, `.github/workflows/research.yml` | 20 Tests, CI mit Rauchtest-Experiment als Artefakt |
 
 ## Schnellstart
 
@@ -33,12 +33,12 @@ Ergebnis: `results/REPORT.md` und `results/results.json`.
 
 ```mermaid
 flowchart LR
-    CSV[MGC.csv\n1000 x 26] --> D[data.py\nDataset, Folds, z-Score]
+    CSV[MGC.csv\n1000 x 26] --> D[data.py\nDedup 985 x 26, Folds, z-Score]
     H[hypotheses/*.md\nvorregistriert] --> E
     D --> E[experiment.py\nCONFIGS x Folds x Repeats]
     E --> M[models.py\nSoftmax / MLP, jit Adam]
     M --> A[acc r,k\nOOF-Vorhersagen]
-    A --> S[stats.py\nt korrigiert, Bootstrap, McNemar]
+    A --> S[stats.py\nt und CI korrigiert, McNemar]
     S --> V{Urteil}
     V --> R[results/REPORT.md\nresults.json]
 ```
@@ -64,14 +64,17 @@ Drei vorregistrierte Hypothesen, jede als gepaarter Vergleich a gegen b auf iden
 
 Vor dem ersten Lauf festgelegt, danach unverändert:
 
-1. Metrik: Accuracy je Fold, 5 x 10-fold stratifiziert, gleiche Folds für a und b.
-2. Korrigierter t-Test nach Nadeau und Bengio (2003) auf den 50 gepaarten Differenzen. Die Korrektur
-   (1/J + n_test/n_train) kompensiert die Abhängigkeit überlappender Trainingsfolds. Der naive t-Test wird
-   nur zum Vergleich ausgegeben.
-3. 95%-Perzentil-Bootstrap-CI des Mittelwerts der Differenzen.
+1. Daten: exakte Feature-Duplikate werden beim Laden entfernt (erstes Vorkommen bleibt), Duplikatgruppen mit
+   widersprüchlichem Label komplett. Aus 1000 Clips werden 985 (13 Kopien, 2 Clips mit Label-Konflikt). Ohne diesen
+   Schritt könnten Kopien desselben Clips in Trainings- und Testfold liegen.
+2. Metrik: Accuracy je Fold, 5 x 10-fold stratifiziert, gleiche Folds für a und b.
+3. Korrigierter t-Test nach Nadeau und Bengio (2003) auf den 50 gepaarten Differenzen. Die Korrektur
+   (1/J + n_test/n_train) kompensiert die Abhängigkeit überlappender Trainingsfolds. Das 95%-CI wird aus derselben
+   korrigierten Varianz gebildet. Naiver t-Test und unkorrigiertes Bootstrap-CI werden nur zur Information ausgegeben.
 4. McNemar auf den Out-of-Fold-Vorhersagen einer Wiederholung als fold-unabhängige Kontrolle.
-5. Urteil: BELEGT bei p_korrigiert < 0.05 und CI > 0. WIDERLEGT bei CI < 0. NICHT BELEGT, wenn das CI die 0
-   enthält. Keine Nachjustierung von alpha oder Metrik nach dem Lauf.
+5. Urteil, symmetrisch: BELEGT bei p_korrigiert < 0.05 und korrigiertem CI > 0. WIDERLEGT bei p_korrigiert < 0.05 und
+   korrigiertem CI < 0. Sonst NICHT BELEGT. Konstante Differenzen ohne Streuung: keine Differenz ergibt p = 1.
+   Keine Nachjustierung von alpha oder Metrik nach dem Lauf.
 
 ## Neue Hypothese hinzufügen
 
@@ -89,8 +92,9 @@ gleich.
 
 ## Einschränkungen und nächste Schritte
 
-- GTZAN hat bekannte Duplikate und Fehllabels (Sturm 2013). Absolute Accuracy ist nicht übertragbar, die gepaarten
-  Vergleiche innerhalb des Datensatzes bleiben aussagekräftig.
+- GTZAN hat bekannte Duplikate und Fehllabels (Sturm 2013). Exakte Duplikate sind entfernt, nahezu identische Clips
+  und Fehllabels nicht. Absolute Accuracy ist nicht übertragbar, die gepaarten Vergleiche innerhalb des Datensatzes
+  bleiben aussagekräftig.
 - Features sind Clip-Mittelwerte über 30 s. Zeitliche Struktur fehlt. Nächster Schritt: Mel-Spektrogramm-Frames
   als Sequenz (siehe `MusicGenreClassification_melspectrogram.ipynb`) mit einem 1D-CNN in JAX, gleiche Statistik.
 - Hyperparameter sind fix. Nächster Schritt: innere CV je Konfiguration, damit ein Vergleich nicht an der Wahl von
