@@ -11,6 +11,9 @@ darum zu schmal; nur zur Information, nicht für das Urteil.
 
 mcnemar_test: Exakter McNemar-Test auf gepoolten Out-of-Fold-Vorhersagen (Binomialtest
 auf den diskordanten Paaren), unabhängig von der Fold-Korrelation.
+
+holm_correction: Holm-Bonferroni-Anpassung der p-Werte über alle Hypothesen eines Laufs,
+kontrolliert die familienweise Fehlerrate bei Mehrfachtests.
 """
 from __future__ import annotations
 
@@ -70,13 +73,26 @@ def mcnemar_test(y: np.ndarray, pred_a: np.ndarray, pred_b: np.ndarray) -> dict:
     return {"only_a_correct": n10, "only_b_correct": n01, "p_exact": p}
 
 
-def verdict(test: dict) -> str:
+def holm_correction(pvalues: list[float]) -> list[float]:
+    """Holm-Bonferroni: sortierte p-Werte mit (m - i) multiplizieren, Monotonie erzwingen, auf 1 kappen."""
+    m = len(pvalues)
+    order = sorted(range(m), key=lambda i: pvalues[i])
+    adjusted = [0.0] * m
+    running = 0.0
+    for rank, i in enumerate(order):
+        running = max(running, (m - rank) * pvalues[i])
+        adjusted[i] = min(1.0, running)
+    return adjusted
+
+
+def verdict(test: dict, p_key: str = "p_corrected") -> str:
     """Vorregistrierte, symmetrische Entscheidungsregel auf Basis des korrigierten Tests:
-    BELEGT, wenn p_korrigiert < alpha und das korrigierte CI vollständig > 0 liegt.
-    WIDERLEGT, wenn p_korrigiert < alpha und das korrigierte CI vollständig < 0 liegt.
-    Sonst NICHT BELEGT: die Daten reichen für keine Richtung aus."""
+    BELEGT, wenn test[p_key] < alpha und das korrigierte CI vollständig > 0 liegt.
+    WIDERLEGT, wenn test[p_key] < alpha und das korrigierte CI vollständig < 0 liegt.
+    Sonst NICHT BELEGT: die Daten reichen für keine Richtung aus.
+    p_key ist "p_corrected" für eine einzelne Hypothese und "p_holm" für eine Familie von Hypothesen."""
     lo, hi = test["ci95_corrected"]
-    significant = test["p_corrected"] < test["alpha"]
+    significant = test[p_key] < test["alpha"]
     if significant and lo > 0:
         return "BELEGT"
     if significant and hi < 0:

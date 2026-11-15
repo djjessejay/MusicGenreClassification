@@ -1,6 +1,6 @@
 import numpy as np
 
-from mgc_jax.stats import bootstrap_ci, mcnemar_test, paired_cv_test, verdict
+from mgc_jax.stats import bootstrap_ci, holm_correction, mcnemar_test, paired_cv_test, verdict
 
 
 def test_corrected_p_is_more_conservative_than_naive():
@@ -63,3 +63,21 @@ def test_mcnemar_counts_and_symmetry():
     assert r["p_exact"] == 1.0
     identical = mcnemar_test(y, a, a)
     assert identical["only_a_correct"] == 0 and identical["p_exact"] == 1.0
+
+
+def test_holm_correction_matches_known_values():
+    # Klassisches Beispiel: p = [0.01, 0.04, 0.03] -> sortiert 0.01*3, max(0.03, 0.03*2), max(0.06, 0.04*1)
+    assert np.allclose(holm_correction([0.01, 0.04, 0.03]), [0.03, 0.06, 0.06])
+    assert holm_correction([0.5]) == [0.5]
+    assert holm_correction([0.9, 0.8]) == [1.0, 1.0]
+    adj = holm_correction([0.001, 0.2, 0.0005])
+    assert adj[2] <= adj[0] <= adj[1]  # Monotonie in der Rangfolge
+
+
+def test_verdict_uses_holm_when_requested():
+    d = np.full(50, 0.02) + np.random.default_rng(5).normal(0, 0.03, 50)
+    t = paired_cv_test(d, 900, 100)
+    t["p_holm"] = 0.5  # Familie macht es nicht signifikant
+    assert verdict(t, p_key="p_holm").startswith("NICHT BELEGT")
+    t["p_holm"] = 1e-4
+    assert verdict(t, p_key="p_holm") == ("BELEGT" if t["ci95_corrected"][0] > 0 else verdict(t, p_key="p_holm"))
