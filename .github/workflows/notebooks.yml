@@ -1,0 +1,30 @@
+name: notebooks
+
+on:
+  push:
+    branches: ["master", "main", "ccr-**"]
+    paths: ["*.ipynb", ".github/workflows/notebooks.yml"]
+  pull_request:
+    paths: ["*.ipynb", ".github/workflows/notebooks.yml"]
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install nbformat
+      - name: Validate notebook structure
+        run: |
+          python - <<'EOF'
+          import glob, nbformat
+          files = sorted(glob.glob("*.ipynb"))
+          assert files, "keine Notebooks gefunden"
+          for f in files:
+              nb = nbformat.read(f, as_version=4)
+              nbformat.validate(nb)
+              print(f"{f}: nbformat {nb.nbformat}, {len(nb.cells)} Zellen, gueltig")
+          EOF
